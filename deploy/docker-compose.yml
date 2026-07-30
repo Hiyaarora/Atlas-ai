@@ -1,0 +1,87 @@
+# ==========================================================================
+# Atlas AI - container stack
+#
+# A draft, not yet exercised. See deploy/README.md.
+# Paths below are relative to deploy/, not the repo root:
+#
+#   cd deploy && docker compose up --build
+#
+# Services:
+#   postgres  -> relational store (users, documents, conversations)
+#   backend   -> FastAPI app, hot-reloads on file change
+#   frontend  -> Vite dev server, hot-reloads on file change
+#
+# This file is DEVELOPMENT ONLY. A hardened production compose file is
+# still to be written.
+# ==========================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: atlas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      # Exposed so you can inspect the DB from the host (psql, DBeaver, ...).
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # `depends_on: condition: service_healthy` relies on this. Without it,
+      # the backend starts before Postgres accepts connections and crashes.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../deploy/backend.Dockerfile
+      target: development
+    container_name: atlas-backend
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      # Overrides .env: inside the compose network the DB is reachable by
+      # service name, not localhost.
+      POSTGRES_HOST: postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount source for hot reload. The anonymous volume on .venv keeps
+      # container-installed packages from being shadowed by the host mount.
+      - ../backend:/app
+      - /app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../deploy/frontend.Dockerfile
+      target: development
+    container_name: atlas-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

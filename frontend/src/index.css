@@ -1,0 +1,193 @@
+/* Tailwind v4: one import replaces the v3 @tailwind trio, and configuration
+   lives in CSS via @theme rather than a JS config file. */
+@import 'tailwindcss';
+
+/* ==========================================================================
+   Design tokens
+   --------------------------------------------------------------------------
+   Every colour, radius, and shadow in Atlas AI resolves to something here.
+   Components never hardcode a hex value, which is what makes the entire app
+   re-skinnable from this block — change --color-accent and the buttons,
+   focus rings, active states, glow, and code highlighting all follow.
+   ========================================================================== */
+
+@theme {
+  /* Surfaces, darkest to lightest. Not pure black: #000 makes shadows
+     invisible and text edges harsh on OLED. */
+  --color-canvas: #08090b;
+  --color-surface: #0f1114;
+  --color-raised: #16191d;
+  --color-overlay: #1c2025;
+
+  --color-line: #23282e;
+  --color-line-strong: #2f353c;
+
+  --color-ink: #f2f4f6;
+  --color-ink-muted: #9aa3ac;
+  --color-ink-faint: #656d76;
+
+  /* One accent, used sparingly. A single saturated colour against a near
+     neutral field reads as deliberate; three read as decoration. */
+  --color-accent: #5ee27a;
+  --color-accent-strong: #3dd45f;
+  --color-accent-soft: #12301c;
+
+  --color-danger: #ff6b6b;
+  --color-danger-soft: #2a1417;
+
+  --radius-panel: 1.25rem;
+  --radius-card: 0.875rem;
+  --radius-pill: 999px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Ambient glow. Fixed and behind everything, so scrolling content moves
+   across a static light source rather than dragging it along — the detail
+   that makes it read as depth instead of a gradient sticker. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(70rem 50rem at 78% 8%, color-mix(in oklab, var(--color-accent) 13%, transparent), transparent 60%),
+    radial-gradient(50rem 40rem at 12% 92%, color-mix(in oklab, var(--color-accent) 7%, transparent), transparent 65%);
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+/* Focus rings: visible for keyboard users, absent for mouse clicks. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Text fields opt out, because their *container* carries the focus styling
+   (`focus-within:border-accent`). Both together draws a hard ring inside a
+   soft one, which looks like a rendering bug. Accessibility is preserved:
+   the border colour shift is the visible focus indicator. */
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 30%, transparent);
+}
+
+/* Scrollbars styled to disappear into the surface rather than punching a
+   bright system-grey stripe through a dark UI. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--color-ink-faint) 60%, transparent);
+  background-clip: content-box;
+}
+
+/* ==========================================================================
+   Motion
+   ========================================================================== */
+
+@keyframes atlas-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes atlas-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+@keyframes atlas-drift {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.8;
+    transform: translateY(-3px);
+  }
+}
+
+.animate-rise {
+  animation: atlas-rise 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* The streaming cursor: a solid block that blinks while tokens arrive. */
+.stream-caret::after {
+  content: '';
+  display: inline-block;
+  width: 0.5ch;
+  height: 1.05em;
+  margin-left: 0.15em;
+  vertical-align: text-bottom;
+  background: var(--color-accent);
+  animation: atlas-blink 1s steps(1) infinite;
+}
+
+.thinking-dot {
+  animation: atlas-drift 1.2s ease-in-out infinite;
+}
+
+/* Respect users who have asked the OS to reduce motion. Animation here is
+   decorative; none of it carries information that would be lost. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
