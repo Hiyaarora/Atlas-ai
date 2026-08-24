@@ -30,6 +30,9 @@ not contain an answer, retrieval returns nothing and the model says so.
 - **Ingests** PDF, DOCX, PPTX, XLSX, CSV, HTML, Markdown and plain text, with
   tables rendered into readable text and archive-bomb guards on the OOXML
   formats.
+- **Reads text inside images** — screenshots, scanned pages, diagrams with
+  labels — via local OCR, indexed against the page or slide it came from and
+  marked so a passage can be traced to how it was obtained.
 - **Retrieves** with dense vector search and BM25 in parallel, fused by
   Reciprocal Rank Fusion, with an optional cross-encoder reranking the
   shortlist.
@@ -357,16 +360,22 @@ serving quietly.
 
 Documented rather than hidden:
 
-- **No OCR.** A scanned PDF or a deck exported as slide images contains no
-  machine-readable text and is rejected with an explanatory error.
-- **No rate limiting on `/auth/login`.** The login endpoint distinguishes
-  "no such account" from "wrong password", which is friendlier and creates a
-  user-enumeration oracle; rate limiting is the mitigation and is not yet
-  implemented.
-- **Citations are not persisted.** Reloading a conversation shows past answers
-  without their source lists.
+- **OCR needs the Tesseract binary.** It is installed in the Docker image, so
+  OCR works in the deployed stack. Running natively without it, OCR reports
+  itself unavailable and documents parse as they would have anyway — images
+  are skipped rather than anything failing.
+- **OCR reads characters, not meaning.** Labels printed on a chart come
+  through; what the chart shows does not. Interpreting figures and diagrams
+  needs a vision model and is a different feature.
+- **No OCR for spreadsheets.** XLSX is parsed read-only, and that mode does
+  not load embedded images at all.
+- **English only** for OCR. Other languages need their own Tesseract package.
+- **Spreadsheets support lookup, not aggregation.** "What is X's price" works;
+  "what is the total" needs text-to-SQL, which is a different tool.
 - **Single-document scope per conversation.** Multi-document workspaces are a
   change to how scope is resolved, not to retrieval itself.
+- **No metrics endpoint.** Counters exist in-process; nothing exports them.
+- **No CI pipeline.** Tests, linters and the Docker build run locally.
 
 ---
 

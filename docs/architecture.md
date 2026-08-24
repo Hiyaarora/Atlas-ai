@@ -451,14 +451,17 @@ dense, and hybrid are interchangeable and independently benchmarkable.
 
 ## 6. Known gaps (deliberate)
 
-| Gap                                        | Notes                              |
-| ------------------------------------------ | ---------------------------------- |
-| No rate limiting on `/auth/login`          | required by the enumeration tradeoff |
-| No metrics endpoint                        | counters exist, no exporter yet    |
-| Citations are not persisted                | reloading a chat loses its sources |
-| No OCR                                     | image-only PDFs and decks fail     |
-| Not containerized                          | draft files in `deploy/`           |
-| No CI pipeline                             | tests run locally only             |
+| Gap                                    | Notes                                    |
+| -------------------------------------- | ---------------------------------------- |
+| No metrics endpoint                    | counters exist in process, no exporter   |
+| No CI pipeline                         | tests, linters and image build run locally |
+| OCR needs a system binary              | present in the image, absent on a native Windows checkout |
+| No OCR for XLSX                        | read-only parsing does not load drawings |
+| OCR is English only                    | other languages need their own package   |
+| No chart or diagram understanding      | OCR reads characters, not meaning        |
+| Spreadsheets: lookup, not aggregation  | totals need text-to-SQL                  |
+| One document per conversation          | a change to scope resolution, not retrieval |
+| Refresh single-flight is per tab       | two tabs reloading together still race   |
 
 ### Why containers come last
 
