@@ -107,6 +107,60 @@ def test_async_and_sync_dsns_use_different_drivers() -> None:
     assert settings.database_url.endswith("/atlas")
 
 
+#: The minimum a production configuration must supply. Anything less is
+#: rejected at construction — see `_refuse_unsafe_production_settings`.
+SAFE_PRODUCTION = {
+    "app_env": "production",
+    "secret_key": "a" * 64,
+    "refresh_cookie_secure": True,
+    "debug": False,
+}
+
+
 def test_is_production_flag() -> None:
-    assert Settings(app_env="production").is_production is True
+    assert Settings(**SAFE_PRODUCTION).is_production is True
     assert Settings(app_env="development").is_production is False
+
+
+def test_production_refuses_the_default_signing_key() -> None:
+    """Shipping the development key means anyone with the source can forge a
+    token for any account. The app must not start rather than serve that."""
+    unsafe = {**SAFE_PRODUCTION, "secret_key": "insecure-development-key"}
+
+    with pytest.raises(ValidationError, match="SECRET_KEY"):
+        Settings(**unsafe)
+
+
+def test_production_refuses_an_insecure_refresh_cookie() -> None:
+    with pytest.raises(ValidationError, match="REFRESH_COOKIE_SECURE"):
+        Settings(**{**SAFE_PRODUCTION, "refresh_cookie_secure": False})
+
+
+def test_production_refuses_debug_mode() -> None:
+    with pytest.raises(ValidationError, match="DEBUG"):
+        Settings(**{**SAFE_PRODUCTION, "debug": True})
+
+
+def test_every_problem_is_reported_at_once() -> None:
+    """Reporting one at a time turns a misconfigured deploy into several
+    failed attempts, each revealing the next thing that was already wrong."""
+    with pytest.raises(ValidationError) as caught:
+        Settings(
+            app_env="production",
+            secret_key="insecure-development-key",
+            refresh_cookie_secure=False,
+            debug=True,
+        )
+
+    message = str(caught.value)
+    assert "SECRET_KEY" in message
+    assert "REFRESH_COOKIE_SECURE" in message
+    assert "DEBUG" in message
+
+
+def test_development_is_left_alone() -> None:
+    """The same settings that are refused in production are the correct
+    defaults locally, and must not be second-guessed there."""
+    settings = Settings(app_env="development", debug=True, refresh_cookie_secure=False)
+
+    assert settings.debug is True

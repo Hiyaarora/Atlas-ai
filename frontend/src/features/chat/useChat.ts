@@ -54,9 +54,16 @@ export function useChat(conversationId: string | null, onTitleChange?: () => voi
         const conversation = await chatApi.getConversation(conversationId);
         if (!cancelled) {
           setMessages(conversation.messages);
-          // Citations are not persisted yet, so reloading a
-          // conversation shows the answers without their sources.
-          setCitationsByMessage({});
+          // Sources travel with the message now, so reopening a conversation
+          // shows the same citations the answer was written with rather than
+          // bare [1] markers pointing at nothing.
+          setCitationsByMessage(
+            Object.fromEntries(
+              conversation.messages
+                .filter((message) => message.citations.length > 0)
+                .map((message) => [message.id, message.citations]),
+            ),
+          );
         }
       } catch (caught) {
         if (!cancelled) {
@@ -93,6 +100,7 @@ export function useChat(conversationId: string | null, onTitleChange?: () => voi
         content: trimmed,
         model: null,
         created_at: new Date().toISOString(),
+        citations: [],
       };
       setMessages((current) => [...current, optimistic]);
 
@@ -126,6 +134,7 @@ export function useChat(conversationId: string | null, onTitleChange?: () => voi
                 content: event.content,
                 model: event.model,
                 created_at: new Date().toISOString(),
+                citations: sources,
               },
             ]);
             // Move the sources from "currently streaming" to "attached to

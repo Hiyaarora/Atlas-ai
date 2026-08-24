@@ -1,18 +1,19 @@
 # ==========================================================================
-# Atlas AI - container stack
+# Atlas AI — deployable stack
 #
-# A draft, not yet exercised. See deploy/README.md.
-# Paths below are relative to deploy/, not the repo root:
+#   cd deploy
+#   docker compose --env-file ../.env up --build
 #
-#   cd deploy && docker compose up --build
+# Then open http://localhost:8080
 #
-# Services:
-#   postgres  -> relational store (users, documents, conversations)
-#   backend   -> FastAPI app, hot-reloads on file change
-#   frontend  -> Vite dev server, hot-reloads on file change
+# Everything is served from ONE origin. nginx serves the built frontend and
+# proxies /api to the backend, so the browser makes no cross-origin request:
+# no CORS, and the refresh cookie is first-party rather than one that needs
+# SameSite=None to survive.
 #
-# This file is DEVELOPMENT ONLY. A hardened production compose file is
-# still to be written.
+# Day-to-day development still runs natively (see the root README). This file
+# exists to make a complete, reproducible deployment, not to replace the dev
+# loop.
 # ==========================================================================
 
 services:
@@ -21,67 +22,88 @@ services:
     container_name: atlas-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      # Exposed so you can inspect the DB from the host (psql, DBeaver, ...).
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-atlas}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # `depends_on: condition: service_healthy` relies on this. Without it,
-      # the backend starts before Postgres accepts connections and crashes.
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      # The backend's `depends_on: service_healthy` waits on this. Without it
+      # the backend starts while Postgres is still initialising, fails its
+      # first connection, and restart-loops until it happens to win the race.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atlas} -d ${POSTGRES_DB:-atlas}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    # Not published to the host. Nothing outside the compose network needs the
+    # database, and publishing it would expose it on every interface.
 
   backend:
     build:
       context: ../backend
       dockerfile: ../deploy/backend.Dockerfile
-      target: development
+      target: production
     container_name: atlas-backend
     restart: unless-stopped
     env_file: ../.env
     environment:
-      # Overrides .env: inside the compose network the DB is reachable by
-      # service name, not localhost.
+      # Inside the network the database answers to its service name.
       POSTGRES_HOST: postgres
-    ports:
-      - "8000:8000"
+      POSTGRES_PORT: 5432
+      # No CORS entries: nginx puts the API on the same origin as the app, so
+      # there is no cross-origin request to allow.
+      CORS_ORIGINS: ""
     volumes:
-      # Bind-mount source for hot reload. The anonymous volume on .venv keeps
-      # container-installed packages from being shadowed by the host mount.
-      - ../backend:/app
-      - /app/.venv
+      # Uploaded files and the vector index. A named volume, because without
+      # one every `docker compose up` would start with an empty knowledge base
+      # while Postgres still held the document rows — the two stores would
+      # disagree about what exists.
+      - backend_storage:/app/storage
+    # --proxy-headers so the client IP comes from X-Forwarded-For rather than
+    # the nginx container's address; per-IP login rate limiting would
+    # otherwise put every user in one bucket. Safe here precisely because the
+    # backend is unpublished: nginx is the only thing that can reach it.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --workers=1
+      - --proxy-headers
+      - --forwarded-allow-ips=*
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/live')"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health/ready"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      # Generous: the first start runs migrations before it serves anything.
+      start_period: 40s
 
   frontend:
     build:
       context: ../frontend
       dockerfile: ../deploy/frontend.Dockerfile
-      target: development
+      target: production
+      args:
+        # "/" means same-origin. See the frontend Dockerfile for why this is a
+        # build argument and cannot be set at run time.
+        VITE_API_BASE_URL: "/"
     container_name: atlas-frontend
     restart: unless-stopped
-    environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL}
     ports:
-      - "5173:5173"
-    volumes:
-      - ../frontend:/app
-      - /app/node_modules
+      - "${ATLAS_PORT:-8080}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
+  backend_storage:

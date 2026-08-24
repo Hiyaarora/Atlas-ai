@@ -133,30 +133,48 @@ Machine-readable `code` for client branching, human `message` for display,
 parses this once, in `lib/api/client.ts`, and converts it to a typed
 `ApiError`.
 
-### Login reports unknown accounts explicitly (accepted risk)
+### Login does not reveal which accounts exist
 
-**Decision, 2026-07-29.** Logging in with an unregistered email returns
-`account_not_found` — "No account found for that email address" — rather than
-a generic failure.
+Logging in with an unregistered email returns exactly the same status, code
+and message as logging in with a wrong password.
 
-The security-conventional choice is a single generic message, because a
-distinct one turns the login form into a **user-enumeration oracle**: an
-attacker scripts it against leaked email lists to learn who holds an account,
-which assists targeted phishing and cuts the cost of credential stuffing.
+A distinct message is friendlier, and this project shipped one for a while.
+It also turns the login form into a **user-enumeration oracle**: an attacker
+scripts it against leaked address lists to learn who holds an account, which
+assists targeted phishing and cuts the cost of credential stuffing. The
+friendliness is not worth handing out the user list.
 
-We accepted that risk deliberately, for clearer UX. Two consequences follow
-and are already implemented:
+Two consequences follow, and both are implemented:
 
-* The constant-time dummy-hash defence was **removed**. Once the response body
-  states whether an account exists, equalising response timing hides nothing —
-  and it let an attacker force 250ms of bcrypt work per request. Restoring one
-  without the other is pointless; `core/security.py` records this.
-* Account-*disabled* status is still only revealed **after** the password
-  verifies, so suspended accounts cannot be probed.
+* **Timing is equalised.** Identical messages are not sufficient on their own.
+  bcrypt takes ~250ms, so returning early for an unknown email would answer in
+  microseconds while a wrong password took a quarter of a second — rebuilding
+  the oracle in the response time. `authenticate_user` verifies the supplied
+  password against a throwaway hash when no user is found, so both paths cost
+  the same.
+* **Account-disabled status is revealed only after the password verifies**, so
+  suspended accounts cannot be probed by someone who does not already hold the
+  credentials.
 
-Mitigations that make this acceptable, still to be added: per-IP and
-per-email rate limiting on `/auth/login`, plus alerting on
-enumeration-shaped traffic.
+### Login is rate limited
+
+Removing the oracle stops enumeration; it does not stop online password
+guessing. `/auth/login` counts *failed* attempts in a sliding window against
+two independent keys:
+
+* **per client IP** — stops one host spraying many accounts
+* **per email** — stops a botnet grinding one account from many hosts
+
+Five failures in fifteen minutes, both configurable. A successful login clears
+the record, so one forgotten password does not count against someone for the
+rest of the hour. The check runs *before* the password is verified: doing it
+afterwards would let an attacker spend 250ms of bcrypt per guess regardless of
+the limit, which is a cheap denial of service against the worker.
+
+The counter is in-process. That is correct for the deployed shape — a single
+uvicorn worker — and does not coordinate across processes; running several
+workers multiplies the effective limit by the worker count. `core/rate_limit.py`
+is the seam where a shared backend would slot in.
 
 ### Refresh must be single-flight on the client
 

@@ -645,3 +645,55 @@ async def test_chat_without_documents_sends_empty_sources(
 
     assert sources["citations"] == []
     assert [name for name, _ in events][-1] == "done"
+
+
+# ==========================================================================
+# Citation persistence
+# ==========================================================================
+
+
+async def test_citations_survive_reopening_a_conversation(
+    client: AsyncClient, auth_headers: dict[str, str], ingested_document: dict
+) -> None:
+    """Sources must still be there after the stream ends and the page reloads.
+
+    Before this, reopening a chat showed the answer with bare [1] markers and
+    no source list — which reads as a broken answer rather than as missing
+    metadata.
+    """
+    conversation_id = ingested_document["conversation_id"]
+
+    stream = await client.post(
+        f"{PREFIX}/conversations/{conversation_id}/messages",
+        json={"content": "Which view reports how often an index is used?"},
+        headers=auth_headers,
+    )
+    streamed = [payload for name, payload in parse_sse(stream.text) if name == "sources"][0]
+    assert streamed["citations"], "precondition: the answer must have cited something"
+
+    # A fresh GET is exactly what the client does on reopen.
+    reopened = await client.get(f"{PREFIX}/conversations/{conversation_id}", headers=auth_headers)
+    assistant = [m for m in reopened.json()["messages"] if m["role"] == "assistant"][-1]
+
+    assert len(assistant["citations"]) == len(streamed["citations"])
+    assert [c["chunk_id"] for c in assistant["citations"]] == [
+        c["chunk_id"] for c in streamed["citations"]
+    ]
+    assert all(c["filename"] and c["page_number"] for c in assistant["citations"])
+
+
+async def test_user_messages_carry_no_citations(
+    client: AsyncClient, auth_headers: dict[str, str], ingested_document: dict
+) -> None:
+    conversation_id = ingested_document["conversation_id"]
+
+    await client.post(
+        f"{PREFIX}/conversations/{conversation_id}/messages",
+        json={"content": "Which view reports how often an index is used?"},
+        headers=auth_headers,
+    )
+    reopened = await client.get(f"{PREFIX}/conversations/{conversation_id}", headers=auth_headers)
+
+    user_turns = [m for m in reopened.json()["messages"] if m["role"] == "user"]
+    assert user_turns
+    assert all(m["citations"] == [] for m in user_turns)

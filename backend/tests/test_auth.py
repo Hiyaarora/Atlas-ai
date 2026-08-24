@@ -1,5 +1,6 @@
 """End-to-end authentication flows against a real database."""
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -149,25 +150,31 @@ async def test_wrong_password_returns_401(client: AsyncClient, registered_user: 
     assert response.status_code == 401
 
 
-async def test_unknown_email_is_reported_distinctly(client: AsyncClient) -> None:
-    """Product decision (2026-07-29): login states when no account exists.
+async def test_unknown_email_is_indistinguishable_from_a_wrong_password(
+    client: AsyncClient, registered_user: User
+) -> None:
+    """The login endpoint must not reveal which emails are registered.
 
-    This is a deliberate tradeoff, not an oversight - it makes the login
-    endpoint a user-enumeration oracle in exchange for clearer UX. See
-    `AccountNotFoundError` for the full rationale and the rate-limiting
-    mitigation still to be added.
+    Atlas AI previously reported `account_not_found` for a friendlier message.
+    That made the endpoint a user-enumeration oracle: scripted against a
+    leaked address list it identifies who holds an account, which assists
+    targeted phishing and cuts the cost of credential stuffing.
 
-    The test exists so that reverting the decision is a conscious act rather
-    than an accident.
+    This test exists so reintroducing the distinction is a conscious act
+    rather than an accident.
     """
-    response = await client.post(
+    unknown = await client.post(
         f"{PREFIX}/auth/login",
         json={"email": "nobody@example.com", "password": TEST_PASSWORD},
     )
-    body = response.json()
+    wrong_password = await client.post(
+        f"{PREFIX}/auth/login",
+        json={"email": registered_user.email, "password": "definitely-not-it"},
+    )
 
-    assert response.status_code == 401
-    assert body["error"]["code"] == "account_not_found"
+    assert unknown.status_code == wrong_password.status_code == 401
+    assert unknown.json()["error"]["code"] == wrong_password.json()["error"]["code"]
+    assert unknown.json()["error"]["message"] == wrong_password.json()["error"]["message"]
 
 
 async def test_wrong_password_does_not_reveal_that_the_password_was_wrong(
@@ -349,3 +356,129 @@ async def test_logout_without_a_session_still_succeeds(client: AsyncClient) -> N
     response = await client.post(f"{PREFIX}/auth/logout")
 
     assert response.status_code == 204
+
+
+# ==========================================================================
+# Login rate limiting
+# ==========================================================================
+
+
+@pytest.fixture(autouse=True)
+def _clean_login_limiter():
+    """Reset the shared counter around every test.
+
+    The limiter lives at module scope because it must remember across
+    requests. That also means one test's failed logins would count against
+    the next, making the suite order-dependent.
+    """
+    from app.api.v1.routes.auth import _login_limiter
+
+    _login_limiter.clear()
+    yield
+    _login_limiter.clear()
+
+
+async def test_repeated_failures_are_eventually_rate_limited(
+    client: AsyncClient, registered_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.v1.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes._login_limiter, "max_attempts", 3)
+
+    for _ in range(3):
+        response = await client.post(
+            f"{PREFIX}/auth/login",
+            json={"email": registered_user.email, "password": "wrong"},
+        )
+        assert response.status_code == 401
+
+    blocked = await client.post(
+        f"{PREFIX}/auth/login",
+        json={"email": registered_user.email, "password": "wrong"},
+    )
+
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "rate_limited"
+    # Without Retry-After a client has to guess, and the usual guess is
+    # "immediately", which keeps the limiter saturated.
+    assert int(blocked.headers["Retry-After"]) > 0
+
+
+async def test_the_limit_applies_before_the_password_is_checked(
+    client: AsyncClient, registered_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blocked caller must be rejected even with the CORRECT password.
+
+    Verifying first would let an attacker spend a bcrypt hash per guess no
+    matter what the limiter said — a cheap denial of service on the worker.
+    """
+    from app.api.v1.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes._login_limiter, "max_attempts", 2)
+
+    for _ in range(2):
+        await client.post(
+            f"{PREFIX}/auth/login",
+            json={"email": registered_user.email, "password": "wrong"},
+        )
+
+    response = await client.post(
+        f"{PREFIX}/auth/login",
+        json={"email": registered_user.email, "password": TEST_PASSWORD},
+    )
+
+    assert response.status_code == 429
+
+
+async def test_a_successful_login_clears_the_record(
+    client: AsyncClient, registered_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One forgotten password must not count against someone for an hour."""
+    from app.api.v1.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes._login_limiter, "max_attempts", 3)
+
+    for _ in range(2):
+        await client.post(
+            f"{PREFIX}/auth/login",
+            json={"email": registered_user.email, "password": "wrong"},
+        )
+
+    good = await client.post(
+        f"{PREFIX}/auth/login",
+        json={"email": registered_user.email, "password": TEST_PASSWORD},
+    )
+    assert good.status_code == 200
+
+    # The budget is full again, so two more failures still do not block.
+    for _ in range(2):
+        again = await client.post(
+            f"{PREFIX}/auth/login",
+            json={"email": registered_user.email, "password": "wrong"},
+        )
+        assert again.status_code == 401
+
+
+async def test_unknown_emails_are_also_counted(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enumeration is exactly a stream of unknown-email attempts, so those
+    must consume the budget too."""
+    from app.api.v1.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes._login_limiter, "max_attempts", 2)
+
+    for index in range(2):
+        response = await client.post(
+            f"{PREFIX}/auth/login",
+            json={"email": f"probe{index}@example.com", "password": TEST_PASSWORD},
+        )
+        assert response.status_code == 401
+
+    blocked = await client.post(
+        f"{PREFIX}/auth/login",
+        json={"email": "probe3@example.com", "password": TEST_PASSWORD},
+    )
+
+    # Counted by IP, so a different email from the same host is still blocked.
+    assert blocked.status_code == 429

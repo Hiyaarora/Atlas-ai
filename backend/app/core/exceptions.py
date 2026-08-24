@@ -89,29 +89,22 @@ class AuthenticationError(AtlasError):
     message = "Authentication is required or the credentials are invalid."
 
 
-class AccountNotFoundError(AuthenticationError):
-    """No account exists for the supplied email.
+class RateLimitedError(AtlasError):
+    """Too many failed attempts from this client or for this account.
 
-    PRODUCT DECISION (2026-07-29): Atlas AI deliberately distinguishes this
-    from a wrong password, because telling someone "you don't have an account
-    yet" is far better UX than a generic failure.
-
-    The accepted cost: the login endpoint is a user-enumeration oracle. Anyone
-    can script it to discover which email addresses are registered, which
-    assists targeted phishing and makes credential-stuffing cheaper.
-
-    Because the response body already reveals account existence, the
-    constant-time defence that used to sit in `authenticate_user` was removed
-    - it can no longer hide anything, and it let an attacker force expensive
-    bcrypt work on demand.
-
-    Mitigations that make this tradeoff acceptable, still to be added:
-    rate limiting per IP and per email, plus alerting on enumeration-shaped
-    traffic.
+    Deliberately not an AuthenticationError: it says nothing about whether the
+    credentials were right, only that the caller must slow down. Reporting it
+    as an auth failure would leak the same signal the limiter exists to
+    protect.
     """
 
-    code = "account_not_found"
-    message = "No account found for that email address."
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "rate_limited"
+    message = "Too many failed sign-in attempts. Please try again shortly."
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(details={"retry_after_seconds": retry_after_seconds})
+        self.retry_after_seconds = retry_after_seconds
 
 
 class AccountDisabledError(AuthenticationError):
@@ -223,12 +216,20 @@ async def atlas_error_handler(_: Request, exc: AtlasError) -> JSONResponse:
         "domain_error",
         extra={"error_code": exc.code, "status_code": exc.status_code, "detail": exc.message},
     )
-    return error_response(
+    response = error_response(
         status_code=exc.status_code,
         code=exc.code,
         message=exc.message,
         details=exc.details,
     )
+
+    # Retry-After is part of what 429 means. Without it a client has to guess
+    # how long to wait, and the usual guess is "immediately", which keeps the
+    # limiter saturated and the user locked out longer than necessary.
+    if isinstance(exc, RateLimitedError):
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+
+    return response
 
 
 async def http_exception_handler(_: Request, exc: StarletteHTTPException) -> JSONResponse:

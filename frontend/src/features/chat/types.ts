@@ -10,6 +10,9 @@ export interface Message {
   content: string;
   model: string | null;
   created_at: string;
+  /** Sources this answer was grounded in, as recorded when it was written.
+   *  Empty for user turns and for answers written before sources were kept. */
+  citations: Citation[];
 }
 
 export interface ConversationSummary {

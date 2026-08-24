@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     Boolean,
@@ -14,7 +14,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -134,6 +134,25 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )
+
+    # The sources this answer was grounded in, stored as a snapshot.
+    #
+    # A SNAPSHOT, not foreign keys, and that is the whole design. Citations
+    # point at chunks, and chunks are deleted when a document is purged. Under
+    # referential integrity the citations would vanish with them — so an
+    # answer that was correctly grounded when written would later show
+    # unresolvable [1] markers, which reads as a bug in the answer rather than
+    # a consequence of housekeeping.
+    #
+    # Denormalised copies of filename, page and excerpt mean a reopened
+    # conversation shows exactly what the user saw when the answer arrived,
+    # for as long as the conversation exists. The cost — the copy does not
+    # follow a renamed document — is the right trade: a citation is a record
+    # of what was cited, not a live pointer.
+    #
+    # NULL for user messages, and for assistant turns written before this
+    # column existed. JSONB rather than JSON so Postgres stores it parsed.
+    citations: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages", lazy="raise")
 

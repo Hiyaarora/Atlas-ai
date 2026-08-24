@@ -87,6 +87,8 @@ export function Transcript({
               content: streamingText,
               model: null,
               created_at: '',
+              // Passed separately below while the reply is still arriving.
+              citations: [],
             }}
             userInitial={userInitial}
             citations={streamingCitations}

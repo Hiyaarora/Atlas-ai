@@ -87,8 +87,8 @@ export function AuthForm({
 /** Turn a machine-readable error code into something a person can act on. */
 function humanizeError(error: ApiError): string {
   switch (error.code) {
-    case 'account_not_found':
-      return 'No account found for that email. Would you like to sign up?';
+    case 'rate_limited':
+      return 'Too many failed attempts. Please wait a few minutes and try again.';
     case 'account_disabled':
       return 'This account has been deactivated. Contact support for help.';
     case 'authentication_error':

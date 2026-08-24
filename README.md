@@ -330,6 +330,29 @@ atlas-ai/
 
 ---
 
+## Deployment
+
+The whole stack runs from one command:
+
+```bash
+cd deploy
+docker compose --env-file ../.env up --build
+```
+
+Open **http://localhost:8080**. PostgreSQL, the API and the built frontend
+come up together; nginx serves the app and proxies `/api` to the backend, so
+everything is on one origin — no CORS, and the refresh cookie is first-party.
+Migrations are applied by the container entrypoint before the API serves
+anything.
+
+See [`deploy/README.md`](deploy/README.md) for the design decisions and the
+settings that must change before deploying anywhere public. The application
+**refuses to start** in production with a default signing key, `DEBUG=true`,
+or an insecure refresh cookie — a misconfigured deploy fails loudly instead of
+serving quietly.
+
+---
+
 ## Known gaps
 
 Documented rather than hidden:

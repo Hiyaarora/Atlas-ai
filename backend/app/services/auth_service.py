@@ -6,6 +6,7 @@ module only decides whether one should be issued.
 """
 
 import asyncio
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -16,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import (
     AccountDisabledError,
-    AccountNotFoundError,
     AuthenticationError,
     ConflictError,
     NotFoundError,
@@ -39,6 +39,11 @@ logger = get_logger(__name__)
 # attacker "no account with that email" hands them a free user-enumeration
 # oracle.
 _INVALID_CREDENTIALS = "Incorrect email or password."
+
+#: A real bcrypt hash of a value nobody can supply, used only to spend the
+#: same CPU time on an unknown email as on a real one. Computed once at
+#: import: doing it per request would double the cost of every failed login.
+_TIMING_EQUALISER_HASH = hash_password(secrets.token_urlsafe(32))
 
 
 async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
@@ -93,8 +98,12 @@ async def register_user(session: AsyncSession, payload: RegisterRequest) -> User
 async def authenticate_user(session: AsyncSession, payload: LoginRequest) -> User:
     """Verify credentials and return the user.
 
-    Failure modes are reported distinctly - see `AccountNotFoundError` for the
-    product decision behind that and the enumeration risk it accepts.
+    Every credential failure reports the SAME error, whether the email is
+    unknown or the password is wrong. Distinguishing them is friendlier, and
+    Atlas AI did exactly that until this change, but it turns the endpoint
+    into a user-enumeration oracle: anyone can script it to learn which
+    addresses are registered, which makes targeted phishing and credential
+    stuffing cheaper. Friendliness is not worth handing out the user list.
 
     Ordering matters and is not arbitrary: the account-disabled check runs
     only *after* the password verifies, so an attacker cannot probe which
@@ -103,8 +112,14 @@ async def authenticate_user(session: AsyncSession, payload: LoginRequest) -> Use
     user = await get_user_by_email(session, payload.email)
 
     if user is None:
+        # Verify against a throwaway hash rather than returning immediately.
+        # Identical responses are not enough on their own — bcrypt takes
+        # ~250ms, so an early return would make "unknown email" answer in
+        # microseconds and "wrong password" in a quarter of a second. The
+        # timing alone would rebuild the oracle the message no longer leaks.
+        await asyncio.to_thread(verify_password, payload.password, _TIMING_EQUALISER_HASH)
         logger.info("login_failed", extra={"reason": "unknown_email"})
-        raise AccountNotFoundError()
+        raise AuthenticationError(_INVALID_CREDENTIALS)
 
     # Offloaded for the same reason as hashing - see `register_user`.
     if not await asyncio.to_thread(verify_password, payload.password, user.hashed_password):

@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.documents import Citation
+
 MAX_MESSAGE_LENGTH = 16_000
 
 
@@ -25,6 +27,18 @@ class MessageResponse(BaseModel):
     content: str
     model: str | None
     created_at: datetime
+
+    # The sources this answer was grounded in, as recorded when it was
+    # written. Empty for user turns, and for assistant turns produced before
+    # citations were stored — normalised from NULL here so the client never
+    # has to distinguish "no sources" from "sources unknown". Both mean the
+    # same thing to a reader: there is nothing to show.
+    citations: list[Citation] = Field(default_factory=list)
+
+    @field_validator("citations", mode="before")
+    @classmethod
+    def _null_is_empty(cls, value: object) -> object:
+        return value or []
 
 
 class ConversationSummary(BaseModel):

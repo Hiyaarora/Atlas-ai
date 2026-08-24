@@ -32,6 +32,7 @@ from app.models.document import Chunk, Document
 from app.schemas.chat import ConversationCreate
 from app.schemas.documents import Citation
 from app.services import document_lifecycle_service, retrieval_service
+from app.services.query_rewrite_service import rewrite_for_retrieval
 
 logger = get_logger(__name__)
 
@@ -348,6 +349,10 @@ async def stream_assistant_reply(
     Opens its own database session — see the module docstring.
     """
     accumulated: list[str] = []
+    # Bound before the try: the failure handlers below persist whatever was
+    # generated along with its sources, and a failure during retrieval itself
+    # would otherwise leave this name undefined.
+    citations: list[Citation] = []
 
     async with AsyncSessionLocal() as session:
         try:
@@ -360,14 +365,25 @@ async def stream_assistant_reply(
 
             # --- retrieval ------------------------------------------------
             # The latest user turn is the retrieval query. Using the whole
-            # conversation would drown the actual question in earlier topics;
-            # Query rewriting would let follow-ups like "what about the
-            # second one?" retrieve sensibly.
+            # conversation would drown the actual question in earlier topics.
             question = next(
                 (m.content for m in reversed(messages) if m.role == "user"),
                 "",
             )
-            citations, system_prompt = await _ground(session, conversation, user_id, question)
+
+            # Follow-ups carry their meaning in the previous turns — "what
+            # about its complexity?" is a pronoun as far as retrieval is
+            # concerned. Resolve it into a standalone query first.
+            #
+            # The rewrite feeds RETRIEVAL only. `history` below is untouched,
+            # so the answering model still sees the user's own words and a
+            # poor rewrite costs relevance rather than putting words in their
+            # mouth.
+            search_query = await rewrite_for_retrieval(question, history[:-1])
+
+            citations, system_prompt = await _ground(
+                session, conversation, user_id, question, search_query=search_query
+            )
             yield SourcesEvent(citations=citations)
 
             async for chunk in provider.stream_chat(history, system_prompt=system_prompt):
@@ -378,7 +394,14 @@ async def stream_assistant_reply(
             # The consumer stopped iterating — in practice, the browser tab
             # closed. Save the partial answer so the user finds it on their
             # next visit rather than a conversation that dead-ends.
-            await _persist_reply(session, conversation_id, accumulated, provider, partial=True)
+            await _persist_reply(
+                session,
+                conversation_id,
+                accumulated,
+                provider,
+                partial=True,
+                citations=citations,
+            )
             raise
 
         except LLMError as exc:
@@ -388,7 +411,14 @@ async def stream_assistant_reply(
             )
             # Keep a partial answer if one exists; discard an empty one rather
             # than storing a blank assistant turn.
-            await _persist_reply(session, conversation_id, accumulated, provider, partial=True)
+            await _persist_reply(
+                session,
+                conversation_id,
+                accumulated,
+                provider,
+                partial=True,
+                citations=citations,
+            )
             yield ErrorEvent(code=exc.code, message=exc.message)
             return
 
@@ -396,7 +426,9 @@ async def stream_assistant_reply(
             yield ErrorEvent(code=exc.code, message=exc.message)
             return
 
-        message = await _persist_reply(session, conversation_id, accumulated, provider)
+        message = await _persist_reply(
+            session, conversation_id, accumulated, provider, citations=citations
+        )
         if message is not None:
             yield DoneEvent(
                 message_id=message.id,
@@ -436,8 +468,16 @@ async def _ground(
     conversation: Conversation,
     user_id: uuid.UUID,
     question: str,
+    *,
+    search_query: str | None = None,
 ) -> tuple[list[Citation], str]:
     """Retrieve context and build the system prompt for this turn.
+
+    `question` is what the user typed; `search_query` is the standalone form
+    used for retrieval, which differs when a follow-up was rewritten. Routing
+    reads the user's own words — "summarise it" is an overview request no
+    matter what the rewriter produced — while the search itself uses the
+    resolved query.
 
     Three cases, deliberately distinct:
 
@@ -449,6 +489,7 @@ async def _ground(
     * Relevant passages -> answer strictly from them, with citations.
     """
     document_ids = await resolve_scope(session, conversation)
+    search_query = (search_query or question).strip() or question
 
     if not document_ids or not question.strip():
         return [], SYSTEM_PROMPT
@@ -482,7 +523,7 @@ async def _ground(
             )
 
     citations = await retrieval_service.retrieve(
-        session, owner_id=user_id, document_ids=document_ids, query=question
+        session, owner_id=user_id, document_ids=document_ids, query=search_query
     )
     if not citations:
         return [], retrieval_service.NO_CONTEXT_SYSTEM_PROMPT
@@ -518,8 +559,16 @@ async def _persist_reply(
     provider: LLMProvider,
     *,
     partial: bool = False,
+    citations: list[Citation] | None = None,
 ) -> Message | None:
-    """Write the assistant's turn. Returns None when there is nothing to save."""
+    """Write the assistant's turn. Returns None when there is nothing to save.
+
+    Citations are stored with the message rather than recomputed on read.
+    Recomputing would re-run retrieval against a corpus that may have changed,
+    so reopening a conversation could show different sources than the answer
+    was actually written from — the citations would drift away from the text
+    that cites them.
+    """
     content = "".join(chunks)
     if not content.strip():
         return None
@@ -529,6 +578,12 @@ async def _persist_reply(
         role="assistant",
         content=content,
         model=provider.model,
+        # `mode="json"` because a Citation holds UUIDs, which JSONB cannot
+        # serialise. Storing strings also means reading the column back never
+        # depends on the current Citation schema.
+        citations=(
+            [citation.model_dump(mode="json") for citation in citations] if citations else None
+        ),
     )
     session.add(message)
 

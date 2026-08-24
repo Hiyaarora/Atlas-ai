@@ -11,7 +11,7 @@ of silently at 2am when the code path is finally hit.
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, PostgresDsn, field_validator
+from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["development", "staging", "production"]
@@ -59,6 +59,17 @@ class Settings(BaseSettings):
     refresh_cookie_name: str = "atlas_refresh"
     refresh_cookie_secure: bool = False
     refresh_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+
+    # Failed sign-ins allowed per key within the window, counted separately
+    # for the client IP and for the email being tried. Two keys because they
+    # stop different attacks: per-IP stops one host spraying many accounts,
+    # per-email stops a botnet grinding one account from many hosts.
+    #
+    # Five in fifteen minutes is comfortably above human error — a person who
+    # has forgotten which password they used gets several tries — and far
+    # below anything useful for guessing.
+    login_rate_limit_attempts: int = 5
+    login_rate_limit_window_seconds: int = 900
 
     # ---- Testing ---------------------------------------------------------
     postgres_test_db: str = "atlas_test"
@@ -108,6 +119,17 @@ class Settings(BaseSettings):
     # Conversations grow without limit; context windows do not. Only the most
     # recent N messages are replayed to the model.
     llm_history_message_limit: int = 20
+
+    # ---- Query rewriting -------------------------------------------------
+    # Resolves follow-ups like "what about its complexity?" into standalone
+    # retrieval queries. Costs one LLM request per rewrite, so a local
+    # heuristic gates it — see services/query_rewrite_service.py.
+    query_rewrite_enabled: bool = True
+
+    # Turns of context given to the rewriter. The referent of "it" is almost
+    # always recent; a longer window costs tokens and invites resolving
+    # against a topic the user has moved on from.
+    query_rewrite_history_turns: int = 6
 
     # ---- Embeddings ------------------------------------------------------
     # `fake` is deterministic and offline, used by the test suite.
@@ -313,6 +335,49 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
+
+    @model_validator(mode="after")
+    def _refuse_unsafe_production_settings(self) -> "Settings":
+        """Fail at startup rather than serve a misconfigured production app.
+
+        Every one of these is a setting that is correct for local development
+        and dangerous in production, which is exactly the combination that
+        survives a deploy unnoticed: nothing breaks, the app just quietly
+        offers less protection than it appears to.
+
+        Refusing to boot is the point. A container that will not start is a
+        loud, immediate failure; a container serving requests with a known
+        signing key is a silent one.
+        """
+        if self.app_env != "production":
+            return self
+
+        problems: list[str] = []
+
+        if self.secret_key == "insecure-development-key":
+            problems.append(
+                "SECRET_KEY is still the development default. Anyone with the "
+                "source can forge access tokens for any account. Generate one "
+                'with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+
+        if not self.refresh_cookie_secure:
+            problems.append(
+                "REFRESH_COOKIE_SECURE is false, so the refresh cookie will be "
+                "sent over plain HTTP and can be captured in transit."
+            )
+
+        if self.debug:
+            problems.append("DEBUG is true, which exposes internals in error responses.")
+
+        if problems:
+            raise ValueError(
+                "Refusing to start in production with unsafe configuration:"
+                + "\n  - "
+                + "\n  - ".join(problems)
+            )
+
+        return self
 
     @field_validator("log_level")
     @classmethod

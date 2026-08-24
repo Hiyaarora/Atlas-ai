@@ -1,0 +1,16 @@
+# Normalise line endings so a Windows checkout still produces working
+# container images.
+#
+# Shell scripts are the reason this file exists. A .sh checked out with CRLF
+# fails inside a Linux container with the famously unhelpful
+# "bad interpreter: /usr/bin/env bash^M" — the carriage return becomes part of
+# the interpreter path. Nothing on Windows reveals it; it appears only when
+# the image runs.
+* text=auto
+
+*.sh    text eol=lf
+*.conf  text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+docker-compose*.yml text eol=lf
+*.ps1   text eol=crlf
