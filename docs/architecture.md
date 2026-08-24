@@ -449,19 +449,26 @@ dense, and hybrid are interchangeable and independently benchmarkable.
 
 ---
 
-## 6. Known gaps (deliberate)
+## 6. Scope boundaries
 
-| Gap                                    | Notes                                    |
-| -------------------------------------- | ---------------------------------------- |
-| No metrics endpoint                    | counters exist in process, no exporter   |
-| No CI pipeline                         | tests, linters and image build run locally |
-| OCR needs a system binary              | present in the image, absent on a native Windows checkout |
-| No OCR for XLSX                        | read-only parsing does not load drawings |
-| OCR is English only                    | other languages need their own package   |
-| No chart or diagram understanding      | OCR reads characters, not meaning        |
-| Spreadsheets: lookup, not aggregation  | totals need text-to-SQL                  |
-| One document per conversation          | a change to scope resolution, not retrieval |
-| Refresh single-flight is per tab       | two tabs reloading together still race   |
+Atlas AI does one thing deliberately well: answering questions from a user's
+own documents, grounded in retrieved passages and cited back to the page.
+
+Several capabilities sit outside that boundary by design rather than by
+omission, because each would pull the system toward being something else:
+
+**Interpreting figures.** OCR recovers characters printed on an image, which
+is a text problem. Understanding what a chart *shows* is a vision problem,
+needing a different class of model with different costs, latencies and
+failure modes.
+
+**Spreadsheet analytics.** Retrieval answers "what does the document say about
+X". Computing a total across ten thousand rows is a query-engine problem, and
+text-to-SQL is the right tool for it — not similarity search over prose.
+
+**Cross-document synthesis.** A conversation is bound to one document so that
+contexts provably cannot mix. Widening that is a change to how scope is
+resolved, not to retrieval, and the interfaces are already shaped for it.
 
 ### Why containers come last
 

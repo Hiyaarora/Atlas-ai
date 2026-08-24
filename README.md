@@ -354,31 +354,6 @@ settings that must change before deploying anywhere public. The application
 or an insecure refresh cookie — a misconfigured deploy fails loudly instead of
 serving quietly.
 
----
-
-## Known gaps
-
-Documented rather than hidden:
-
-- **OCR needs the Tesseract binary.** It is installed in the Docker image, so
-  OCR works in the deployed stack. Running natively without it, OCR reports
-  itself unavailable and documents parse as they would have anyway — images
-  are skipped rather than anything failing.
-- **OCR reads characters, not meaning.** Labels printed on a chart come
-  through; what the chart shows does not. Interpreting figures and diagrams
-  needs a vision model and is a different feature.
-- **No OCR for spreadsheets.** XLSX is parsed read-only, and that mode does
-  not load embedded images at all.
-- **English only** for OCR. Other languages need their own Tesseract package.
-- **Spreadsheets support lookup, not aggregation.** "What is X's price" works;
-  "what is the total" needs text-to-SQL, which is a different tool.
-- **Single-document scope per conversation.** Multi-document workspaces are a
-  change to how scope is resolved, not to retrieval itself.
-- **No metrics endpoint.** Counters exist in-process; nothing exports them.
-- **No CI pipeline.** Tests, linters and the Docker build run locally.
-
----
-
 ## License
 
 MIT
