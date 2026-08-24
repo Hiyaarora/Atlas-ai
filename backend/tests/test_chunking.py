@@ -7,6 +7,7 @@ compensated for by any downstream stage.
 
 import pytest
 
+from app.ingestion.base import ParsedPage
 from app.ingestion.chunking import chunk_pages, split_text
 
 LOREM = (
@@ -95,34 +96,44 @@ def test_separator_punctuation_is_preserved() -> None:
 
 def test_chunk_pages_tags_each_chunk_with_its_page() -> None:
     """A chunk with no page number cannot be cited."""
-    pages = [(1, LOREM * 3), (2, LOREM * 3), (7, "A short final page.")]
+    pages = [
+        ParsedPage(number=1, text=LOREM * 3),
+        ParsedPage(number=2, text=LOREM * 3),
+        ParsedPage(number=7, text="A short final page."),
+    ]
 
     results = chunk_pages(pages, chunk_size=150, chunk_overlap=30)
 
-    page_numbers = {page for page, _ in results}
+    page_numbers = {page.number for page, _ in results}
     assert page_numbers == {1, 2, 7}
 
 
 def test_pages_are_chunked_independently() -> None:
     """No chunk may span two pages, or it could not be attributed to either."""
-    pages = [(1, "Alpha content here."), (2, "Bravo content here.")]
+    pages = [
+        ParsedPage(number=1, text="Alpha content here."),
+        ParsedPage(number=2, text="Bravo content here."),
+    ]
 
     results = chunk_pages(pages, chunk_size=500, chunk_overlap=0)
 
-    for page_number, chunk in results:
-        if page_number == 1:
+    for page, chunk in results:
+        if page.number == 1:
             assert "Bravo" not in chunk.text
         else:
             assert "Alpha" not in chunk.text
 
 
 def test_chunk_index_restarts_per_page() -> None:
-    pages = [(1, LOREM * 4), (2, LOREM * 4)]
+    pages = [
+        ParsedPage(number=1, text=LOREM * 4),
+        ParsedPage(number=2, text=LOREM * 4),
+    ]
 
     results = chunk_pages(pages, chunk_size=120, chunk_overlap=20)
 
-    first_page = [chunk.index for page, chunk in results if page == 1]
-    second_page = [chunk.index for page, chunk in results if page == 2]
+    first_page = [chunk.index for page, chunk in results if page.number == 1]
+    second_page = [chunk.index for page, chunk in results if page.number == 2]
 
     assert first_page == list(range(len(first_page)))
     assert second_page == list(range(len(second_page)))

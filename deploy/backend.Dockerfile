@@ -15,10 +15,23 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# curl backs the compose healthcheck and is worth having when debugging a
-# container that will not come up.
+# System packages.
+#
+#   curl           backs the compose healthcheck, and is worth having when
+#                  debugging a container that will not come up.
+#   tesseract-ocr  the OCR engine itself. pytesseract is only a wrapper that
+#                  shells out to this binary - pip cannot install it, and
+#                  without it OCR reports itself unavailable and images are
+#                  skipped rather than anything failing.
+#   ...-eng        the English language data. The engine alone recognises
+#                  nothing; each language is a separate package, so only the
+#                  configured one is installed rather than the full set,
+#                  which runs to hundreds of megabytes.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        tesseract-ocr \
+        tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependency manifest first and alone: Docker caches this layer, so editing

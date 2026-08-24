@@ -27,7 +27,10 @@ it. Repeating the tail of each chunk at the head of the next means such a
 sentence survives intact in at least one.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+from app.ingestion.base import ParsedPage
 
 # Ordered most- to least-semantic. The trailing "" is the guaranteed
 # terminator: splitting on the empty string always succeeds, so recursion
@@ -141,24 +144,29 @@ def _merge(pieces: list[str], chunk_size: int, chunk_overlap: int) -> list[str]:
 
 
 def chunk_pages(
-    pages: list[tuple[int, str]],
+    pages: Sequence[ParsedPage],
     *,
     chunk_size: int,
     chunk_overlap: int,
-) -> list[tuple[int, TextChunk]]:
-    """Chunk each page independently, returning `(page_number, chunk)` pairs.
+) -> list[tuple[ParsedPage, TextChunk]]:
+    """Chunk each page independently, returning `(page, chunk)` pairs.
 
     Chunking per page rather than across the whole document costs a little
     efficiency at page boundaries but buys something worth more: every chunk
     has exactly one page number, so a citation can point at a real place in
     the document. A chunk spanning pages 4 and 5 can be cited as neither.
-    """
-    results: list[tuple[int, TextChunk]] = []
 
-    for page_number, page_text in pages:
+    The whole `ParsedPage` is returned rather than only its number so the
+    caller keeps the page's metadata. That is how a chunk knows its text was
+    recognised from an image rather than read from a text layer — two pages
+    can share a number, and the number alone cannot tell them apart.
+    """
+    results: list[tuple[ParsedPage, TextChunk]] = []
+
+    for page in pages:
         for index, text in enumerate(
-            split_text(page_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            split_text(page.text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         ):
-            results.append((page_number, TextChunk(text=text, index=index)))
+            results.append((page, TextChunk(text=text, index=index)))
 
     return results

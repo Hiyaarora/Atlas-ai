@@ -141,6 +141,60 @@ class Settings(BaseSettings):
     # request payload limit and makes one failure cost more work.
     embedding_batch_size: int = 64
 
+    # ---- OCR -------------------------------------------------------------
+    # Reads text out of images embedded in documents, and out of scanned
+    # pages that have no text layer. Character recognition only — it does not
+    # describe pictures or interpret charts.
+    #
+    # Requires the `tesseract-ocr` system binary. When that is absent every
+    # document parses exactly as it did before OCR existed; nothing fails.
+    ocr_enabled: bool = True
+
+    # Tesseract language pack. Each extra language costs accuracy on the
+    # others and needs its own apt package in the image.
+    ocr_language: str = "eng"
+
+    # Below this many pixels an image cannot hold readable text. Bullet
+    # glyphs, spacers and logo marks are common, and each one would otherwise
+    # cost a subprocess launch to learn nothing.
+    ocr_min_image_pixels: int = 10_000
+
+    # Quality gates. OCR on an image containing no text does not return
+    # nothing — it returns punctuation and stray letters read out of noise.
+    # Indexed, that becomes a retrievable chunk of gibberish handed to the
+    # model as evidence, which is worse than no OCR at all.
+    ocr_min_characters: int = 16
+    ocr_min_words: int = 4
+    #: Fraction of tokens that must be 3+ characters. Noise reads as isolated
+    #: single letters; real text does not.
+    ocr_min_word_ratio: float = 0.5
+
+    # A page can carry both a text layer and an image of that same text —
+    # what scanners produce when they "make a PDF searchable". Above this
+    # word overlap the OCR text is treated as a duplicate and dropped, so one
+    # fact is not stored as two independent-looking sources.
+    ocr_redundancy_threshold: float = 0.8
+
+    # A PDF page with less text than this is treated as image-only and
+    # rendered whole for OCR, rather than having its images pulled out
+    # individually. A scanned page is one full-page image; extracting it as a
+    # picture and OCRing that is the same work with more steps.
+    ocr_pdf_page_text_threshold: int = 100
+
+    # Resolution used when rendering such a page. 200 DPI is the usual floor
+    # for reliable recognition of body text; higher costs memory and time for
+    # little gain.
+    ocr_pdf_render_dpi: int = 200
+
+    # Hard ceiling per document. A slide deck can hold hundreds of images,
+    # and OCR is seconds each — without a bound one upload could occupy a
+    # worker for an hour.
+    ocr_max_images_per_document: int = 40
+
+    # Per-image limit. Tesseract can hang on pathological input; this turns
+    # that into a skipped image rather than a stuck ingestion.
+    ocr_timeout_seconds: int = 30
+
     # ---- Chunking --------------------------------------------------------
     # Characters, not tokens. Roughly 1000 chars ~ 250 tokens for English.
     chunk_size: int = 1000

@@ -168,6 +168,20 @@ class Chunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
+    #: How this text was obtained: "text" read from the file's text layer,
+    #: "ocr" recognised from an image.
+    #:
+    #: Worth recording because the two are not equally trustworthy. A text
+    #: layer is exact; OCR is a reading, and misreads a zero as an O. Marking
+    #: it means a passage can be traced to its origin when an answer looks
+    #: wrong, and lets OCR content be excluded later without re-ingesting.
+    #: `server_default` as well as `default`, because the migration adds one
+    #: and the two must agree — a model that omits it makes autogenerate
+    #: see permanent drift, which is what test_migrations catches.
+    content_type: Mapped[str] = mapped_column(
+        String(16), default="text", server_default="text", nullable=False
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )

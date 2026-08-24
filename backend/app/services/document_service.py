@@ -248,9 +248,8 @@ async def _run_pipeline(session: AsyncSession, document: Document) -> IngestionS
     parsed = await asyncio.to_thread(parser.parse, data, filename=document.filename)
 
     # --- chunk ------------------------------------------------------------
-    page_texts = [(page.number, page.text) for page in parsed.pages]
     chunked = chunk_pages(
-        page_texts,
+        parsed.pages,
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
     )
@@ -263,14 +262,17 @@ async def _run_pipeline(session: AsyncSession, document: Document) -> IngestionS
     await get_vector_store().delete(where={"document_id": str(document.id)})
 
     chunks: list[Chunk] = []
-    for position, (page_number, text_chunk) in enumerate(chunked):
+    for position, (page, text_chunk) in enumerate(chunked):
         chunks.append(
             Chunk(
                 document_id=document.id,
                 position=position,
-                page_number=page_number,
+                page_number=page.number,
                 content=text_chunk.text,
                 char_count=len(text_chunk.text),
+                # Set by the parser when the text was recognised from an image
+                # rather than read from a text layer.
+                content_type=page.metadata.get("content_type", "text"),
             )
         )
     session.add_all(chunks)
@@ -300,6 +302,7 @@ async def _run_pipeline(session: AsyncSession, document: Document) -> IngestionS
                 "filename": document.filename,
                 "page_number": chunk.page_number,
                 "position": chunk.position,
+                "content_type": chunk.content_type,
             },
         )
         for chunk, vector in zip(chunks, vectors, strict=True)

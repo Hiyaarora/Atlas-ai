@@ -33,6 +33,13 @@ dependencies = [
     "openpyxl>=3.1.0",          # .xlsx / .xlsm
     "beautifulsoup4>=4.12.0",   # .html
     "lxml>=5.0.0",              # HTML parser backend, recovers from malformed markup
+    # --- OCR ---
+    # Reads text out of images and scanned pages. pytesseract is a thin
+    # wrapper: it shells out to the `tesseract` BINARY, which is a system
+    # package and not installed by pip. Where that binary is absent, OCR
+    # reports itself unavailable and documents parse exactly as before.
+    "pytesseract>=0.3.13",
+    "pillow>=10.4.0",           # image decoding for OCR
     "chromadb>=0.5.0",          # vector index
     "python-multipart>=0.0.9",  # multipart/form-data uploads
 ]
