@@ -77,7 +77,32 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
 
     llm_temperature: float = 0.7
-    llm_max_output_tokens: int = 2048
+
+    # Raised from 2048 after measuring truncation. See llm_thinking_budget:
+    # the two interact, and the old value was being consumed before the model
+    # had finished speaking.
+    llm_max_output_tokens: int = 4096
+
+    # Tokens the model may spend on internal reasoning it never shows.
+    #
+    # gemini-2.5-flash reasons before answering by default, and those tokens
+    # are charged against max_output_tokens. Measured on a single ordinary
+    # question with the previous 2048 budget:
+    #
+    #   finish_reason      MAX_TOKENS
+    #   thinking tokens    1760      <- invisible
+    #   visible tokens      284      <- what the user got
+    #
+    # 86% of the budget went to reasoning nobody sees, and the answer stopped
+    # mid-sentence. Setting 0 disables thinking: the same question then
+    # produced 15945 characters instead of 1330.
+    #
+    # 0 is right for a grounded assistant, whose job is to report what the
+    # retrieved passages say rather than to reason its way to new conclusions.
+    # Raise it if a task genuinely needs deliberation, and raise
+    # llm_max_output_tokens with it or the visible answer loses the room.
+    llm_thinking_budget: int = 0
+
     llm_request_timeout_seconds: float = 60.0
 
     # Conversations grow without limit; context windows do not. Only the most

@@ -42,6 +42,11 @@ class GeminiProvider(LLMProvider):
             system_instruction=system_prompt,
             temperature=settings.llm_temperature,
             max_output_tokens=settings.llm_max_output_tokens,
+            # Without this, gemini-2.5-flash reasons before answering and
+            # charges those tokens to max_output_tokens — measured at 1760 of
+            # 2048 on an ordinary question, leaving 284 for the reply, which
+            # therefore stopped mid-sentence.
+            thinking_config=types.ThinkingConfig(thinking_budget=settings.llm_thinking_budget),
         )
 
     @staticmethod
@@ -74,12 +79,33 @@ class GeminiProvider(LLMProvider):
                 config=self._build_config(system_prompt),
             )
 
+            finish_reason = None
+
             async for response in stream:
                 # A chunk can legitimately carry no text: safety blocks and
                 # the final usage-metadata chunk both arrive with text=None.
                 text = getattr(response, "text", None)
                 if text:
                     yield text
+
+                # Carried on the last chunk. Captured rather than ignored
+                # because a reply cut off at the token ceiling is
+                # indistinguishable from a complete one to the reader — the
+                # sentence simply stops. Silent truncation is the worst
+                # failure mode here: the user believes they read an answer.
+                candidates = getattr(response, "candidates", None) or []
+                if candidates:
+                    finish_reason = getattr(candidates[0], "finish_reason", None) or finish_reason
+
+            if finish_reason is not None and "MAX_TOKENS" in str(finish_reason):
+                logger.warning(
+                    "gemini_answer_truncated",
+                    extra={
+                        "model": self.model,
+                        "max_output_tokens": settings.llm_max_output_tokens,
+                        "thinking_budget": settings.llm_thinking_budget,
+                    },
+                )
 
         except asyncio.CancelledError:
             # The client disconnected. Propagate so the caller can persist
