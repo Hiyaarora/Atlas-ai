@@ -10,6 +10,9 @@ embedding, hybrid retrieval, rank fusion, reranking, grounded generation — is
 implemented directly rather than assembled from a framework, and every
 retrieval threshold in it was derived from measurement rather than guessed.
 
+**▶ Live demo: https://13-206-126-184.sslip.io** — running on AWS. Create an
+account and upload a document; nothing to install.
+
 ---
 
 ## Why this exists
@@ -353,6 +356,50 @@ settings that must change before deploying anywhere public. The application
 **refuses to start** in production with a default signing key, `DEBUG=true`,
 or an insecure refresh cookie — a misconfigured deploy fails loudly instead of
 serving quietly.
+
+### Running on AWS
+
+The live instance runs the same Compose stack on a single EC2 host:
+
+```
+Internet
+   │  HTTPS
+   ▼
+Caddy ── automatic TLS, Let's Encrypt
+   │  127.0.0.1:8080
+   ▼
+nginx ── serves the built frontend, proxies /api
+   │
+   ├── FastAPI backend ── Tesseract OCR, ChromaDB
+   └── PostgreSQL
+```
+
+| | |
+| ---------- | ---------------------------------------------------- |
+| Compute    | EC2 `t4g.small` (AWS Graviton, arm64), ap-south-1     |
+| Storage    | 30 GB gp3 — Docker volumes for Postgres, vectors and uploads |
+| TLS        | Caddy, certificates issued and renewed automatically  |
+| Networking | Elastic IP; SSH restricted to one address; only 80/443 public |
+
+**Built for arm64.** The image is rebuilt on Graviton rather than emulated —
+PyMuPDF, ChromaDB and Tesseract all run natively.
+
+**Nothing stateful is ephemeral.** PostgreSQL, the Chroma index and uploaded
+files live on named Docker volumes on the attached EBS disk, so they survive
+container replacement and host reboots. Chroma stores a SQLite database and
+memory-mapped index files, which is why it is given a block device rather than
+network storage.
+
+**Secrets stay on the host.** The production environment file is generated on
+the instance, is never committed, and never reaches the frontend bundle. The
+database and API listen on loopback only; the security group exposes nothing
+but HTTP and HTTPS.
+
+Redeploying after a push:
+
+```bash
+git pull && cd deploy && docker compose --env-file ../.env up -d --build
+```
 
 ## License
 
